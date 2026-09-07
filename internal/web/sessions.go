@@ -94,7 +94,53 @@ func taskIDForSession(id string) string {
 	return ""
 }
 
-// resolveClaimTranscript maps a PLAN task's claim stamp (plan.Task.Session,
+// claimTranscriptIndex is resolveClaimTranscript's shared, ONE-time directory
+// listing (live-claim-session-link-resolver): a plan view resolves this per
+// RUNNING row (potentially dozens), and the naive per-row `filepath.Glob`
+// this replaced re-scanned the whole sessions dir on every one of them —
+// O(running-rows * sessions-on-disk) directory traffic that blew the plan
+// page's render budget on a session-heavy hive (pageload-plan-page-budget).
+// Building the index once per planViewData call and doing an in-memory
+// per-row lookup makes the whole resolution O(sessions-on-disk +
+// running-rows) instead.
+type claimTranscriptIndex struct {
+	// byPID maps a trailing pid to every "bee-<taskid>-<epoch>-<pid>" file
+	// stem sharing it, so a lookup is a map hit plus a linear scan of only
+	// that pid's (normally single-digit) collisions, never the whole dir.
+	byPID map[string][]string
+}
+
+// newClaimTranscriptIndex reads sessionsDir once and buckets every
+// `bee-*-<pid>.md` transcript stem by its trailing pid. A read error (missing
+// dir, permissions) yields an empty index rather than failing the caller —
+// resolveClaimTranscript then finds no match and the caller falls back to the
+// raw claim id, exactly as if no transcript existed yet.
+func newClaimTranscriptIndex(sessionsDir string) *claimTranscriptIndex {
+	idx := &claimTranscriptIndex{byPID: make(map[string][]string)}
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		return idx
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		stem := strings.TrimSuffix(name, ".md")
+		if stem == name { // not a .md file
+			continue
+		}
+		i := strings.LastIndex(stem, "-")
+		if i < 0 || i == len(stem)-1 {
+			continue
+		}
+		pid := stem[i+1:]
+		idx.byPID[pid] = append(idx.byPID[pid], stem)
+	}
+	return idx
+}
+
+// resolve maps a PLAN task's claim stamp (plan.Task.Session,
 // `<sm>-<claimepoch>-<pid>` — cmd/honeybee's wtBranch) to the transcript file
 // it ACTUALLY landed under (live-claim-session-link-resolver). The two ids are
 // NOT the same string: the claim token is stamped once at pass start
@@ -108,15 +154,15 @@ func taskIDForSession(id string) string {
 // `sessions/<sm>-<claimepoch>-<pid>.md` never exists.
 //
 // Given the claiming task's id and its claim stamp, this extracts the shared
-// pid suffix and globs sessionsDir for `bee-<taskid>-*-<pid>.md`, returning the
-// matching transcript's file stem (sorted so a later epoch — the freshest
-// re-run sharing that pid, vanishingly rare but possible under fan-out — wins)
-// or "" when no match is found (a session recorded off-box before its stub
-// synced, or a legacy claim shape with no trailing pid to anchor on) so the
-// caller can fall back to the raw claim id rather than link to a resolved
-// empty string.
-func resolveClaimTranscript(sessionsDir, taskID, claim string) string {
-	if taskID == "" || claim == "" {
+// pid suffix and looks up every "bee-<taskid>-*-<pid>" stem already indexed,
+// returning the matching transcript's file stem (sorted so a later epoch —
+// the freshest re-run sharing that pid, vanishingly rare but possible under
+// fan-out — wins) or "" when no match is found (a session recorded off-box
+// before its stub synced, or a legacy claim shape with no trailing pid to
+// anchor on) so the caller can fall back to the raw claim id rather than link
+// to a resolved empty string.
+func (idx *claimTranscriptIndex) resolve(taskID, claim string) string {
+	if taskID == "" || claim == "" || idx == nil {
 		return ""
 	}
 	i := strings.LastIndex(claim, "-")
@@ -127,14 +173,18 @@ func resolveClaimTranscript(sessionsDir, taskID, claim string) string {
 	if pid == "" {
 		return ""
 	}
-	pattern := filepath.Join(sessionsDir, "bee-"+taskID+"-*-"+pid+".md")
-	matches, err := filepath.Glob(pattern)
-	if err != nil || len(matches) == 0 {
+	prefix := "bee-" + taskID + "-"
+	var matches []string
+	for _, stem := range idx.byPID[pid] {
+		if strings.HasPrefix(stem, prefix) {
+			matches = append(matches, stem)
+		}
+	}
+	if len(matches) == 0 {
 		return ""
 	}
 	sort.Strings(matches)
-	best := matches[len(matches)-1]
-	return strings.TrimSuffix(filepath.Base(best), ".md")
+	return matches[len(matches)-1]
 }
 
 // sessionDisplayName shortens a session id for display

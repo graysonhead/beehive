@@ -1130,6 +1130,14 @@ func (s *Server) planViewData(ctx context.Context, sm repo.Submodule) (Plan, err
 	// dashboard counter (a stale claim whose session's own stream branch was
 	// still live read wrongly "idle" here). A task's Running row links to its
 	// session (SessionHref) so it is a WORKING LINK, never inert text.
+	// live-claim-session-link-resolver: built ONCE per render (a single
+	// sessions-dir listing), not per row — a claimed row's claim stamp
+	// (`<sm>-<claimepoch>-<pid>`) is never the transcript's real file stem
+	// (`bee-<taskid>-<transcriptepoch>-<pid>`, see claimTranscriptIndex), and
+	// re-globbing the whole sessions dir per running row (the first cut of
+	// this fix) re-introduced the exact O(rows * sessions-on-disk) directory
+	// traffic pageload-plan-page-budget already gated against.
+	transcripts := newClaimTranscriptIndex(sm.SessionsDir())
 	for i := range p.Items {
 		it := &p.Items[i]
 		if it.Session == "" {
@@ -1137,17 +1145,13 @@ func (s *Server) planViewData(ctx context.Context, sm repo.Submodule) (Plan, err
 		}
 		it.Running = s.sessionLiveAt(ctx, head, sm, it.Session, now, ttl)
 		if it.Running {
-			// live-claim-session-link-resolver: the claim stamp (it.Session,
-			// `<sm>-<claimepoch>-<pid>`) is NOT the transcript's file stem —
-			// the transcript lands as `bee-<taskid>-<transcriptepoch>-<pid>`
-			// (see resolveClaimTranscript). Linking the raw claim id 404s/
-			// polls "(waiting for session output…)" forever, since that
-			// filename never exists on disk. Resolve the real transcript by
-			// taskid+pid correlation, falling back to the raw claim id only
-			// when no matching transcript is found yet (session started but
-			// its stub hasn't synced locally).
+			// Linking the raw claim id 404s/polls "(waiting for session
+			// output…)" forever, since that filename never exists on disk.
+			// Resolve the real transcript by taskid+pid correlation, falling
+			// back to the raw claim id only when no matching transcript is
+			// found yet (session started but its stub hasn't synced locally).
 			sessID := it.Session
-			if resolved := resolveClaimTranscript(sm.SessionsDir(), it.ID, it.Session); resolved != "" {
+			if resolved := transcripts.resolve(it.ID, it.Session); resolved != "" {
 				sessID = resolved
 			}
 			it.SessionHref = "/submodule/" + sm.Name + "/session/" + sessID

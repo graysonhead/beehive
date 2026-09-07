@@ -1545,21 +1545,22 @@ func TestResolveClaimTranscript(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "bee-other-task-1788743600-3786199.md"), []byte("# session\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	idx := newClaimTranscriptIndex(dir)
 	// The claim stamp: same pid, EARLIER epoch, and the submodule name (not the
 	// task name) as its leading segment — exactly cmd/honeybee's wtBranch shape.
-	got := resolveClaimTranscript(dir, "pillar-x", "pillar-1788743651-3786199")
+	got := idx.resolve("pillar-x", "pillar-1788743651-3786199")
 	want := "bee-pillar-x-1788743676-3786199"
 	if got != want {
-		t.Fatalf("resolveClaimTranscript = %q, want %q", got, want)
+		t.Fatalf("resolve = %q, want %q", got, want)
 	}
 	// No matching transcript on disk yet (e.g. stub not synced locally) ->
 	// caller falls back to the raw claim id, never a resolved empty string.
-	if got := resolveClaimTranscript(dir, "no-such-task", "pillar-1788743651-3786199"); got != "" {
-		t.Fatalf("resolveClaimTranscript for absent task = %q, want \"\"", got)
+	if got := idx.resolve("no-such-task", "pillar-1788743651-3786199"); got != "" {
+		t.Fatalf("resolve for absent task = %q, want \"\"", got)
 	}
 	// A claim stamp with no trailing pid to anchor on resolves to nothing.
-	if got := resolveClaimTranscript(dir, "pillar-x", "noPid"); got != "" {
-		t.Fatalf("resolveClaimTranscript with no pid = %q, want \"\"", got)
+	if got := idx.resolve("pillar-x", "noPid"); got != "" {
+		t.Fatalf("resolve with no pid = %q, want \"\"", got)
 	}
 }
 
