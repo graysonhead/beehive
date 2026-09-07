@@ -1137,7 +1137,20 @@ func (s *Server) planViewData(ctx context.Context, sm repo.Submodule) (Plan, err
 		}
 		it.Running = s.sessionLiveAt(ctx, head, sm, it.Session, now, ttl)
 		if it.Running {
-			it.SessionHref = "/submodule/" + sm.Name + "/session/" + it.Session
+			// live-claim-session-link-resolver: the claim stamp (it.Session,
+			// `<sm>-<claimepoch>-<pid>`) is NOT the transcript's file stem —
+			// the transcript lands as `bee-<taskid>-<transcriptepoch>-<pid>`
+			// (see resolveClaimTranscript). Linking the raw claim id 404s/
+			// polls "(waiting for session output…)" forever, since that
+			// filename never exists on disk. Resolve the real transcript by
+			// taskid+pid correlation, falling back to the raw claim id only
+			// when no matching transcript is found yet (session started but
+			// its stub hasn't synced locally).
+			sessID := it.Session
+			if resolved := resolveClaimTranscript(sm.SessionsDir(), it.ID, it.Session); resolved != "" {
+				sessID = resolved
+			}
+			it.SessionHref = "/submodule/" + sm.Name + "/session/" + sessID
 		}
 	}
 	// Link each task to a viewable doc — never inert when one is locatable

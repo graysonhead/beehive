@@ -94,6 +94,49 @@ func taskIDForSession(id string) string {
 	return ""
 }
 
+// resolveClaimTranscript maps a PLAN task's claim stamp (plan.Task.Session,
+// `<sm>-<claimepoch>-<pid>` — cmd/honeybee's wtBranch) to the transcript file
+// it ACTUALLY landed under (live-claim-session-link-resolver). The two ids are
+// NOT the same string: the claim token is stamped once at pass start
+// (main.go's wtBranch := swarm.SessionID(sm.Name, now)), while the transcript
+// file is named moments later from the WORK branch instead of the submodule
+// name (swarm.SessionID(res.Branch, now) where res.Branch is "bee-<taskid>"
+// for a work/review/arbitration pass) — so the transcript stem is
+// `bee-<taskid>-<transcriptepoch>-<pid>`, a DIFFERENT epoch (moments later)
+// but the SAME trailing pid. Assuming the claim id IS the transcript filename
+// (the bug this resolves) 404s/placeholder-polls forever, because
+// `sessions/<sm>-<claimepoch>-<pid>.md` never exists.
+//
+// Given the claiming task's id and its claim stamp, this extracts the shared
+// pid suffix and globs sessionsDir for `bee-<taskid>-*-<pid>.md`, returning the
+// matching transcript's file stem (sorted so a later epoch — the freshest
+// re-run sharing that pid, vanishingly rare but possible under fan-out — wins)
+// or "" when no match is found (a session recorded off-box before its stub
+// synced, or a legacy claim shape with no trailing pid to anchor on) so the
+// caller can fall back to the raw claim id rather than link to a resolved
+// empty string.
+func resolveClaimTranscript(sessionsDir, taskID, claim string) string {
+	if taskID == "" || claim == "" {
+		return ""
+	}
+	i := strings.LastIndex(claim, "-")
+	if i < 0 || i == len(claim)-1 {
+		return ""
+	}
+	pid := claim[i+1:]
+	if pid == "" {
+		return ""
+	}
+	pattern := filepath.Join(sessionsDir, "bee-"+taskID+"-*-"+pid+".md")
+	matches, err := filepath.Glob(pattern)
+	if err != nil || len(matches) == 0 {
+		return ""
+	}
+	sort.Strings(matches)
+	best := matches[len(matches)-1]
+	return strings.TrimSuffix(filepath.Base(best), ".md")
+}
+
 // sessionDisplayName shortens a session id for display
 // (session-list-links-labels): the "bee-" prefix and the "-<epoch>-<pid>"
 // suffix stripped — exactly taskIDForSession's capture, reused here so the

@@ -1529,6 +1529,133 @@ func TestPlanViewPills(t *testing.T) {
 	}
 }
 
+// TestResolveClaimTranscript locks live-claim-session-link-resolver's core
+// primitive: a PLAN claim stamp (`<sm>-<claimepoch>-<pid>`) is NOT the
+// transcript's file stem (`bee-<taskid>-<transcriptepoch>-<pid>`, a slightly
+// LATER epoch since cmd/honeybee mints the claim token before the work
+// transcript's session id) — only the trailing pid is shared. The resolver
+// must correlate by taskid+pid, never assume the claim id IS the filename.
+func TestResolveClaimTranscript(t *testing.T) {
+	dir := t.TempDir()
+	// The real on-disk transcript: task pillar-x, epoch 1788743676, pid 3786199.
+	if err := os.WriteFile(filepath.Join(dir, "bee-pillar-x-1788743676-3786199.md"), []byte("# session\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A decoy for a DIFFERENT task sharing the same pid must never match.
+	if err := os.WriteFile(filepath.Join(dir, "bee-other-task-1788743600-3786199.md"), []byte("# session\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The claim stamp: same pid, EARLIER epoch, and the submodule name (not the
+	// task name) as its leading segment — exactly cmd/honeybee's wtBranch shape.
+	got := resolveClaimTranscript(dir, "pillar-x", "pillar-1788743651-3786199")
+	want := "bee-pillar-x-1788743676-3786199"
+	if got != want {
+		t.Fatalf("resolveClaimTranscript = %q, want %q", got, want)
+	}
+	// No matching transcript on disk yet (e.g. stub not synced locally) ->
+	// caller falls back to the raw claim id, never a resolved empty string.
+	if got := resolveClaimTranscript(dir, "no-such-task", "pillar-1788743651-3786199"); got != "" {
+		t.Fatalf("resolveClaimTranscript for absent task = %q, want \"\"", got)
+	}
+	// A claim stamp with no trailing pid to anchor on resolves to nothing.
+	if got := resolveClaimTranscript(dir, "pillar-x", "noPid"); got != "" {
+		t.Fatalf("resolveClaimTranscript with no pid = %q, want \"\"", got)
+	}
+}
+
+// TestPlanViewDataResolvesMismatchedClaimSessionLink is the end-to-end
+// regression for live-claim-session-link-resolver's reported root cause: a
+// task's PLAN.md `session=<sm>-<epoch>-<rand>` claim stamp names NO file on
+// disk (the transcript is filed under the WORK branch, `bee-<taskid>-
+// <laterepoch>-<samerand>.md`), so the live-claim view's SessionHref must
+// resolve to and link the REAL transcript, not the never-existing claim-id
+// path that previously polled "(waiting for session output…)" forever.
+func TestPlanViewDataResolvesMismatchedClaimSessionLink(t *testing.T) {
+	s, root := setup(t)
+	// t1's claim (set up in setup()) is session=bee-1 with a FRESH heartbeat
+	// (2026-06-30T11:00:00Z) — rewrite it to the real claim-token shape this
+	// bug needs: `<sm>-<epoch>-<pid>`, distinct from the transcript filename.
+	planPath := filepath.Join(root, "submodules", "alpha", repo.PlanFile)
+	fresh := time.Now().UTC().Format(time.RFC3339)
+	src := "<!-- Beehive-ROI: abc123 -->\n# Plan\n\n" +
+		"## t1 [TODO] <!-- attempts=0 deps= weight=16 session=alpha-1000-777 heartbeat=" + fresh + " -->\n" +
+		"build the thing\nFiles: a.go\nDoc: br-t1.md\nAccept: works\n"
+	if err := os.WriteFile(planPath, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sessDir := filepath.Join(root, "submodules", "alpha", "sessions")
+	if err := os.MkdirAll(sessDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The transcript ACTUALLY lands here: task name (not submodule name) as
+	// its prefix, a later epoch, but the SAME trailing pid as the claim.
+	transcriptID := "bee-t1-1005-777"
+	if err := os.WriteFile(filepath.Join(sessDir, transcriptID+".md"), []byte("# session\nworking...\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sm, err := s.submodule("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.planViewData(context.Background(), sm)
+	if err != nil {
+		t.Fatalf("planViewData: %v", err)
+	}
+	var t1 PlanItem
+	found := false
+	for _, it := range p.Items {
+		if it.ID == "t1" {
+			t1, found = it, true
+		}
+	}
+	if !found {
+		t.Fatal("t1 not found in plan view")
+	}
+	if !t1.Running {
+		t.Fatalf("t1 with a fresh claim should read Running=true: %+v", t1)
+	}
+	want := "/submodule/alpha/session/" + transcriptID
+	if t1.SessionHref != want {
+		t.Fatalf("SessionHref = %q, want %q (the real transcript, not the claim id %q)", t1.SessionHref, want, t1.Session)
+	}
+}
+
+// TestPlanViewDataStaleClaimNotRunning locks the badge-freshness half of
+// live-claim-session-link-resolver: a task whose claim stamp is still present
+// in PLAN.md but whose heartbeat is well past the TTL must NOT read Running
+// (the "running" badge trusting the raw claim-stamp presence, ignoring
+// heartbeat age, is the same root-cause class as the mismatched-link bug) —
+// unless its own session's stream branch is independently still live, which a
+// bare claim stamp with no such branch is not.
+func TestPlanViewDataStaleClaimNotRunning(t *testing.T) {
+	s, root := setup(t)
+	planPath := filepath.Join(root, "submodules", "alpha", repo.PlanFile)
+	src := "<!-- Beehive-ROI: abc123 -->\n# Plan\n\n" +
+		"## t1 [TODO] <!-- attempts=0 deps= weight=16 session=alpha-1000-777 heartbeat=2020-01-01T00:00:00Z -->\n" +
+		"build the thing\nFiles: a.go\nDoc: br-t1.md\nAccept: works\n"
+	if err := os.WriteFile(planPath, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sm, err := s.submodule("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.planViewData(context.Background(), sm)
+	if err != nil {
+		t.Fatalf("planViewData: %v", err)
+	}
+	for _, it := range p.Items {
+		if it.ID == "t1" {
+			if it.Running {
+				t.Fatalf("stale claim (heartbeat 2020) must not read Running=true: %+v", it)
+			}
+			if it.SessionHref != "" {
+				t.Fatalf("stale, non-running claim must not carry a SessionHref: %+v", it)
+			}
+		}
+	}
+}
+
 // TestPlanRowDeepAnchors locks plan-row-deep-anchors: every plan row's <tr>
 // carries a stable, PREFIXED per-row anchor id derived from its task id
 // (`task-<id>`, never the bare id — a numeric-looking task id would otherwise
