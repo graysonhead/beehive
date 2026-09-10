@@ -99,7 +99,27 @@ to edit ROI.md (a git hook rejects any ROI.md write made under the honeybee
 identity) — it is changed only deliberately, by a human operator, through this
 editor. Preserve its role: keep it a clear statement of desired outcomes and
 conventions, in the operator's own words. Do NOT invent implementation tasks,
-status metadata, weights, or machine markers here — those belong in PLAN.md.`
+status metadata, weights, or machine markers here — those belong in PLAN.md.
+
+DEFAULT EDIT STYLE is CONDENSE-AND-PRESERVE, not append. An edit request is a
+request to fold new intent into the document and tighten it, not to bolt one
+more paragraph onto the end:
+- CONDENSE forward intent: strip resolved historical narrative — audit notes,
+  reconcile-correction notes, reopen notes, DONE/shipped inventories, and
+  backstory about a decision that has already been settled. Tighten wording.
+  Drop NO substance: every still-relevant goal, constraint, or convention must
+  survive the condense, just stated more concisely.
+- PRESERVE explicitly, never drop: every live feature/task the ROI still wants,
+  every definition-of-done/Check criterion, every "already shipped — do not
+  refile" reconcile guard, and every UNRESOLVED operator decision. An open
+  question stays OPEN — never resolve it unilaterally on the operator's behalf.
+- Draft the edit to the review surface for operator APPROVAL before it lands;
+  publish only through the normal worktree/publish-to-main path. ROI.md stays
+  human-owned — it is never committed under the honeybee identity, drafted or
+  final.
+- Appending-only (leaving old text untouched and tacking new text on the end)
+  is WRONG: it lets the document grow unbounded with stale narrative and is not
+  an acceptable edit style for this file.`
 
 const planFileContext = `This file is PLAN.md — the honeybee-owned task list derived from ROI.md. It is
 parsed by a strict, line-oriented format (internal/plan); preserve that format

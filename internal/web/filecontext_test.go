@@ -62,6 +62,44 @@ func TestResolveFileContextDistinct(t *testing.T) {
 	}
 }
 
+// TestROIFileContextDefaultsToCondenseAndPreserve locks roi-edit-condense-preserve-
+// context: the seeded ROI.md editing rules default to CONDENSE-and-PRESERVE, not
+// append-only, and that rule is scoped to ROI.md — a non-ROI path (even PLAN.md,
+// its sibling honeybee-owned file) must NOT pick up these ROI-edit-specific rules.
+func TestROIFileContextDefaultsToCondenseAndPreserve(t *testing.T) {
+	roi := resolveFileContext("submodules/alpha/ROI.md")
+	for _, sub := range []string{
+		"CONDENSE",
+		"PRESERVE",
+		"definition-of-done",
+		"already shipped",
+		"UNRESOLVED",
+		"draft",
+		"APPROVAL",
+		"publish",
+		"human-owned",
+		"Appending-only",
+		"WRONG",
+	} {
+		if !strings.Contains(roi, sub) {
+			t.Errorf("ROI.md context missing condense-and-preserve token %q:\n%s", sub, roi)
+		}
+	}
+
+	// Negative control: a non-ROI path must not carry these ROI-edit-specific
+	// rules (load-bearing — a text-neutered/removed rule set fails this).
+	for name, p := range map[string]string{
+		"plan": resolveFileContext("submodules/alpha/PLAN.md"),
+		"code": resolveFileContext("internal/web/web.go"),
+	} {
+		for _, sub := range []string{"CONDENSE", "Appending-only"} {
+			if strings.Contains(p, sub) {
+				t.Errorf("%s context should not carry ROI-edit condense-and-preserve rules; found %q:\n%s", name, sub, p)
+			}
+		}
+	}
+}
+
 // TestRulesFileContextKeysOffConstant locks the submodule-rules-md wiring of the
 // chat-diff editor (agent/edit) context: the resolver keys the RULES.md rule off
 // the shared repo.RulesFile constant (not a stray literal), a submodule-qualified
