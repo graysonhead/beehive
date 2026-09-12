@@ -332,22 +332,19 @@ func run() error {
 		// so the stats page derives per-model performance from git; when ModelFor
 		// routes a kind to an override, the runner stamps that instead.
 		Model: eff.Model,
-		// Opt-in per-pass injection trim. Deliberately an env flag rather than a
-		// config knob: the layered-config surface is owned by honeybee-model-routing,
-		// and gating here keeps the injected set byte-identical to the historical
-		// path until a site sets BEEHIVE_LEAN_INJECT=1.
-		LeanInject: os.Getenv("BEEHIVE_LEAN_INJECT") == "1",
-		// Opt-in per-turn context bounding (diffs + rolling summary instead of a bare
-		// "continue" that invites re-reading every file each turn). Same env-flag
-		// rationale as LeanInject; off keeps the per-turn prompt byte-identical to the
-		// historical bare "continue"/lean-hint and skips the extra session poll.
-		LeanContext: os.Getenv("BEEHIVE_LEAN_CONTEXT") == "1",
-		// Opt-in precomputed task brief on a Work dispatch (resolved worktree/branch/
-		// pointer + deterministic doc-path/commit-stamp + the task card + head
-		// excerpts of the task's own files) so the agent skips discovery plumbing and
-		// a whole-tree scan. Same env-flag rationale as LeanInject; off keeps the
-		// injected preamble byte-identical to the historical path.
-		LeanBrief: os.Getenv("BEEHIVE_LEAN_BRIEF") == "1",
+		// Per-pass injection trim (analysis A). Trims the injected system prompt to
+		// only the sections this pass's kind acts on. Default ON via the layered
+		// config; BEEHIVE_LEAN_INJECT=0 forces it off, =1 on.
+		LeanInject: eff.LeanInjectEnabled(),
+		// Per-turn context bounding (analysis C): changed-file diffs + a distilled
+		// decision log instead of re-injecting everything each turn. Default ON;
+		// BEEHIVE_LEAN_CONTEXT overrides either way.
+		LeanContext: eff.LeanContextEnabled(),
+		// Precomputed task brief on a Work dispatch (analysis B): resolved worktree/
+		// branch/pointer + deterministic doc-path/commit-stamp + a doc skeleton + head
+		// excerpts of the task's own files + the package neighborhood. Default ON;
+		// BEEHIVE_LEAN_BRIEF overrides either way.
+		LeanBrief: eff.LeanBriefEnabled(),
 		// Host build/test environment (CGO_ENABLED=0 + root-fs GOTMPDIR/GOCACHE, …)
 		// resolved from the layered config. The runner exports it into the honeybee
 		// process at agent spawn AND states the mandated invocation once in the

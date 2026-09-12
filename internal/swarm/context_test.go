@@ -71,11 +71,13 @@ func TestRollingSummaryVerbatimUnderCap(t *testing.T) {
 	}
 }
 
-// TestRollingSummaryElidesMiddleKeepsEnds proves an over-cap transcript keeps the
-// head (task framing) and, critically, the tail (most recent state / completion
-// cue), eliding only the middle — the tail is what the completion check needs.
-func TestRollingSummaryElidesMiddleKeepsEnds(t *testing.T) {
-	tc := &turnCompactor{summaryCap: 300}
+// TestRollingSummaryElidesEarlierKeepsTail proves an over-cap transcript with no
+// pinned decisions keeps the most recent tail (the state / completion cue the
+// next turn needs) and drops earlier scrollback with an honest marker. The full
+// transcript remains authoritative on the session branch.
+func TestRollingSummaryElidesEarlierKeepsTail(t *testing.T) {
+	tc := newTurnCompactor()
+	tc.summaryCap = 300
 	lines := make([]string, 0, 100)
 	for i := 0; i < 100; i++ {
 		lines = append(lines, fmt.Sprintf("line-%03d", i))
@@ -86,17 +88,63 @@ func TestRollingSummaryElidesMiddleKeepsEnds(t *testing.T) {
 	if !strings.Contains(got, "elided") {
 		t.Fatalf("over-cap summary must mark the elision, got:\n%s", got)
 	}
-	if !strings.Contains(got, "line-000") {
-		t.Errorf("summary dropped the head (task framing):\n%s", got)
-	}
 	if !strings.Contains(got, "line-099") {
 		t.Errorf("summary dropped the tail (most recent state / completion cue):\n%s", got)
 	}
-	if strings.Contains(got, "line-050") {
-		t.Errorf("summary did not elide the middle scrollback:\n%s", got)
+	if strings.Contains(got, "line-000") {
+		t.Errorf("summary kept the earliest scrollback that should have been elided:\n%s", got)
 	}
 	if len(got) >= len(full) {
 		t.Errorf("summary (%d) not smaller than the full transcript (%d)", len(got), len(full))
+	}
+}
+
+// TestRollingSummaryPinsDecisionsAcrossTurns proves a decision surfaced in an
+// EARLY turn survives into a later turn's summary even after it scrolls out of
+// the recent tail — the core of analysis C (no more self-contradiction from a
+// byte-sliced middle).
+func TestRollingSummaryPinsDecisionsAcrossTurns(t *testing.T) {
+	tc := newTurnCompactor()
+	tc.summaryCap = 400
+	// Turn 1: a clear decision the agent makes.
+	tc.rollingSummary("I chose the streaming approach because it avoids the double-read.")
+	// Turn 2..N: lots of unrelated activity that would byte-slice the decision away.
+	var noise []string
+	for i := 0; i < 200; i++ {
+		noise = append(noise, fmt.Sprintf("ran command number %03d", i))
+	}
+	got := tc.rollingSummary(strings.Join(noise, "\n"))
+	if !strings.Contains(got, "chose the streaming approach") {
+		t.Fatalf("pinned decision was lost from a later turn's summary:\n%s", got)
+	}
+	if !strings.Contains(got, "Decisions & findings so far") {
+		t.Errorf("decision log header missing:\n%s", got)
+	}
+}
+
+// TestDistillDecisionsExtractsCuesSkipsNoise proves the heuristic keeps salient
+// lines and drops diff/noise lines.
+func TestDistillDecisionsExtractsCuesSkipsNoise(t *testing.T) {
+	transcript := strings.Join([]string{
+		"assistant: I decided to cache the pins because re-reading was the cost.",
+		"+ added a line",
+		"- removed a line",
+		"assistant: the regression test passes now.",
+		"assistant: just some chatter with no salient content here",
+	}, "\n")
+	got := distillDecisions(transcript)
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, "decided to cache") {
+		t.Errorf("dropped a decision line: %q", got)
+	}
+	if !strings.Contains(joined, "regression test passes") {
+		t.Errorf("dropped a test-result line: %q", got)
+	}
+	if strings.Contains(joined, "added a line") || strings.Contains(joined, "removed a line") {
+		t.Errorf("kept a diff/noise line: %q", got)
+	}
+	if strings.Contains(joined, "chatter") {
+		t.Errorf("kept a non-salient line: %q", got)
 	}
 }
 

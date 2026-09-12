@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -88,6 +89,24 @@ type Config struct {
 	MaxTurns     int               `yaml:"max_turns"`     // per-honeybee turn cap
 	MergeRetries int               `yaml:"merge_retries"` // publish conflict-resolution attempts before deferring (default 8)
 	RejectLimit  int               `yaml:"reject_limit"`  // rejections before NEEDS-HUMAN
+
+	// Lean* are the per-pass context-quality levers (analysis A/B/C). Each is a
+	// *bool so "unset" (nil) is distinguishable from an explicit false and resolves
+	// to the DEFAULT-ON behavior below; a config or the matching BEEHIVE_LEAN_*
+	// env var may force either state (env wins, both directions). They replace the
+	// former env-only, default-OFF gating so a normal install gets the leaner,
+	// higher-signal context by default.
+	//   - LeanInject: trim the injected system prompt to the current pass's kind
+	//     (drop other kinds' role sections + managed boilerplate). Default ON.
+	//   - LeanBrief: inject the runner-precomputed Work brief (worktree/branch/
+	//     pointers + doc skeleton + task-file excerpts + package neighborhood).
+	//     Default ON.
+	//   - LeanContext: bound each post-first Work turn to changed-file diffs + a
+	//     distilled decision log instead of re-injecting everything. Default ON.
+	LeanInject  *bool `yaml:"lean_inject"`
+	LeanBrief   *bool `yaml:"lean_brief"`
+	LeanContext *bool `yaml:"lean_context"`
+
 	// TurnIdleTimeoutMinutes is the liveness watchdog — the ONE timeout that ends a
 	// turn. A turn that produces NO new transcript activity (no new tool call,
 	// streamed tool output, thinking, text, or any tool field) for this long is hung,
@@ -375,6 +394,15 @@ func merge(base, over Config) Config {
 	if over.AbortOnRemoteFailure != nil {
 		out.AbortOnRemoteFailure = over.AbortOnRemoteFailure
 	}
+	if over.LeanInject != nil {
+		out.LeanInject = over.LeanInject
+	}
+	if over.LeanBrief != nil {
+		out.LeanBrief = over.LeanBrief
+	}
+	if over.LeanContext != nil {
+		out.LeanContext = over.LeanContext
+	}
 	if over.AgentEphemeral != nil {
 		out.AgentEphemeral = over.AgentEphemeral
 	}
@@ -406,6 +434,36 @@ func (c Config) ModelFor(kind string) string {
 		return m
 	}
 	return c.Model
+}
+
+// leanResolve resolves a Lean* lever: the BEEHIVE_LEAN_<NAME> env var wins in
+// EITHER direction ("1" -> on, "0"/"false" -> off), else the config *bool when
+// set, else the default-ON behavior. env="" (unset) never forces a value.
+func leanResolve(cfg *bool, env string) bool {
+	switch strings.ToLower(strings.TrimSpace(env)) {
+	case "1", "true", "on", "yes":
+		return true
+	case "0", "false", "off", "no":
+		return false
+	}
+	if cfg != nil {
+		return *cfg
+	}
+	return true // default ON
+}
+
+// LeanInjectEnabled / LeanBriefEnabled / LeanContextEnabled report the effective
+// state of each context-quality lever: config *bool (nil => default ON) unless
+// the matching BEEHIVE_LEAN_* env var forces it either way. The env override is
+// read here so a single call site in the honeybee wiring resolves both layers.
+func (c Config) LeanInjectEnabled() bool {
+	return leanResolve(c.LeanInject, os.Getenv("BEEHIVE_LEAN_INJECT"))
+}
+func (c Config) LeanBriefEnabled() bool {
+	return leanResolve(c.LeanBrief, os.Getenv("BEEHIVE_LEAN_BRIEF"))
+}
+func (c Config) LeanContextEnabled() bool {
+	return leanResolve(c.LeanContext, os.Getenv("BEEHIVE_LEAN_CONTEXT"))
 }
 
 // AbortsOnRemoteFailure reports the effective abort_on_remote_failure setting:

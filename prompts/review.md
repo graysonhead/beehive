@@ -7,6 +7,10 @@ were given is real; treat it as a review, not fresh work.
 What to read:
 - Your task card (with its `Review:` note naming the implementer branch, submodule commit, and
   change-doc path) is PROVIDED in the Context (`## Your task`) — do NOT open PLAN.md or ROI.md to read it.
+- **Recon broadly — you have a full read-only checkout, so do not judge the diff in isolation.** Read
+  the code AROUND the change: the callers of every symbol it touches, the sibling files in the same
+  package, and the tests that exercise it. A break the diff hides (an unupdated caller, a violated local
+  convention, a desynced sibling, a missing regression test) is exactly what a narrow review misses.
 - The implementer's code on branch `bee-<taskid>` in the submodule checkout `submodules/<sm>/repo`
   (read-only). Inspect via git, e.g. `git -C submodules/<sm>/repo log/show/diff bee-<taskid>`. The runner
   already verified this commit is reachable before dispatching you, so it should already be present. If it

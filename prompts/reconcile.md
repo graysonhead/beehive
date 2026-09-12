@@ -7,7 +7,11 @@ You are given the diff of ROI.md from the last-reconciled commit to HEAD (ROI.md
 
 - Read the diff. Update PLAN.md: add/modify/remove/retire tasks so the plan matches new intent.
 - Preserve in-flight task status; retiring a task in flight -> NEEDS-REVIEW with a doc, not silent delete.
-- Add design docs for new tasks. Tag dependencies. Rightsize for one context window.
+- Add design docs for new tasks. Tag dependencies. Size each task as a COHERENT VERTICAL SLICE — a
+  self-contained deliverable (change plus its test) one isolated agent can hold in full — not the
+  smallest possible fragment; a change split across micro-tasks that cannot see each other loses global
+  coherence and thrashes review. Give every NEW task a `Context: <the why>` line carrying the parent ROI
+  intent it serves, so the isolated implementer understands its slice's purpose without opening ROI.md.
 - **Give every task a definition of done.** Lower the ROI's success criteria into each task's machine
   check: `beehive task add <sm> <id> --check '<cmd>'` (a command whose exit 0 asserts the task's REAL
   effect — curl+grep the endpoint, `kubectl rollout status`, pull the image by digest),

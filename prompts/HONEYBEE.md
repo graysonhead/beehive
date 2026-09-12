@@ -229,7 +229,10 @@ When you FILE a task (`beehive task add`), give it its check: `--check '<cmd>'`,
 `ROI.md` changed since `PLAN.md`'s `<!-- Beehive-ROI: <sha> -->` stamp. Your Context carries the diff
 range.
 - Read the `ROI.md` diff. Fold the new intent into `PLAN.md`: add/modify/retire tasks. A task retired
-  while in flight → `NEEDS-REVIEW` with a doc, not a silent delete.
+  while in flight → `NEEDS-REVIEW` with a doc, not a silent delete. Size each task as a COHERENT VERTICAL
+  SLICE (a self-contained deliverable one isolated agent can hold in full), not the smallest fragment,
+  and give every new task a `Context: <the why>` line carrying the parent ROI intent it serves — the
+  implementer sees only its card, never `ROI.md`.
 - Add design docs for new tasks, tag dependencies, and reweight tasks if the priority order moved
   (`beehive help` for the weighting scale).
 - **Give every task a definition of done.** Lower the ROI's success criteria into each task's machine
@@ -429,7 +432,14 @@ NOT reimplement it, and do NOT open `PLAN.md` or `ROI.md` to read the task. Your
 worktree is `$SUBMODULE_WORKTREE` (a checkout at the tracked-branch tip, with the implementer branch
 fetched as `origin/bee-<taskid>`) — reach it ONLY via `beehive submodule git`. Inspect read-only with
 `beehive submodule git diff HEAD..origin/bee-<taskid>` and `... log origin/bee-<taskid>`; the change doc
-is at `submodules/<sm>/docs/bee-<taskid>-<taskid>.md` and the task's `Review:` note is in your card. A
+is at `submodules/<sm>/docs/bee-<taskid>-<taskid>.md` and the task's `Review:` note is in your card.
+- **RECON BROADLY before you judge — the diff alone is not enough.** Your worktree is a FULL, read-only
+  checkout: there is no token-cost reason to stay narrow. Read the code AROUND the change — the callers
+  of every symbol it touched, the sibling files in the same package, and the tests that exercise it — so
+  you catch a break the diff hides (a caller the change didn't update, a convention it violated, a
+  sibling it desynced, a missing test). A rubber-stamp of a plausible-looking diff is the review failure
+  mode this step exists to prevent; judge the change in the context of the whole package, not in
+  isolation. A
 **doc-only task** (its `Files:` touch only `docs/`, `PLAN.md`, or other beehive-layer text, no submodule
 code) has NO `bee-<taskid>` CODE branch — its change doc is the only artifact. A missing `bee-<taskid>`
 branch / `couldn't find remote ref` there is EXPECTED, not a defect: review the change doc and PLAN.md
@@ -573,99 +583,18 @@ Done when the task leaves `NEEDS-ARBITRATION`.
     fine — the template's sections are additive structure for a substantial blocker, not mandatory
     boilerplate for a trivial one.
 
-    **When the Steps are mechanically executable, ship a script, not prose
-    (needs-human-executable-artifact).** If the operator-facing Steps are a fixed sequence of
-    concrete commands (host-root ops, a data migration, a cutover, a multi-step provisioning run),
-    the swarm's job is NOT to transcribe them into the `--reason` — it is to AUTHOR a single,
-    reviewable, executable artifact (a `set -euo pipefail` script / a rendered manifest) that the
-    operator reviews once and runs, and reduce the escalation Steps to "review then run this
-    artifact." The artifact carries the precision the human cannot be asked to reconstruct: EVERY
-    value the swarm cannot know from inside the sandbox (a host path, a device, a color, a service
-    name, a credential location) is a DOCUMENTED OPTION/flag with a sane default, never a blank the
-    operator must infer; every destructive step is gated behind a typed confirmation and supports a
-    dry run; every phase fails loudly with no silent partial. If the artifact must exist on `main`
-    before the human step can reference it, SPLIT the work: a normal mergeable **part (a)** task
-    authors + reviews + merges the script/tooling, and the **part (b)** NEEDS-HUMAN escalation
-    (hard-dep on part (a) DONE) is only "review then run `path/to/script …`". Vague imperative prose
-    that could have been a script IS a shortcut — the same class as a placeholder value: it pushes
-    the swarm's unfinished work onto the operator and invites a mis-execution the script would have
-    prevented. The `--category` is still whichever of the four applies (usually
-    `external-permission`); this rule governs the SHAPE of what you hand over, not the gate.
-
-    **State the EXACT command, not "run the script."** The escalation Steps must give the operator
-    the LITERAL invocation to paste — binary/script path plus every flag filled with the REAL value
-    this migration needs (`sudo ./scripts/foo.sh quiesce --gostream-state /var/gostream`), in run
-    order, one line per command. Never `run the script with the appropriate flags`, never a
-    `<placeholder>` the operator must resolve: if a value is knowable from the target's state, put it
-    in; if it is genuinely operator-only (a path only they can confirm), name the ONE thing to fill
-    and where to get it. "Review then run this artifact" means the review is of a command they can
-    already see in full — an escalation that makes the operator reconstruct the command line is the
-    same vague-prose shortcut this rule forbids. **When the script/test/binary lives on a worktree
-    branch (a `bee-<taskid>` submodule checkout or a hive `.worktrees/<branch>/`), the literal
-    invocation you give is the `beehive [submodule] worktree exec …` form** — e.g. `beehive submodule
-    worktree exec <sm> <branch> -- ./scripts/foo.sh quiesce --gostream-state /var/gostream` — never a
-    `cd <path> && …` or a bare relative path the operator must resolve against the right worktree.
-
-    **ONE command, not a checklist of them.** If the artifact has multiple steps, it runs them
-    itself in order from a single entrypoint — do NOT hand the operator N commands to paste in
-    sequence (that is just prose steps wearing a monospace font). The one command stops ONLY at the
-    genuine human-decision gates the swarm cannot make (judge private/opaque data, confirm a
-    user-visible cutover is healthy); everything mechanical between gates is automatic, and those
-    gates are un-skippable even under a `--yes`/non-interactive flag. Offer the individual steps as
-    an advanced escape hatch for retry/inspection, but the DEFAULT the escalation names is the single
-    run-it-all command.
-
-    **Bake known values as defaults; the example command carries only what the swarm genuinely
-    cannot know.** If you know a value (a path, a namespace, a service name discoverable from the
-    target's state), it is a DEFAULT inside the artifact — not a flag the operator must supply. A
-    flag whose value equals its default is noise: it is one more field for the operator to fumble and
-    it implies a choice that does not exist. The ideal example command is zero-flag (`sudo ./run.sh
-    migrate`); a flag appears in the example ONLY for a value the operator alone holds. Validate the
-    baked defaults up front (assert each path/resource exists before mutating) so a wrong default
-    fails loudly and immediately instead of silently doing the wrong thing.
-
-    **Bake a default ONLY for a value you can actually validate; a value you CANNOT validate stays a
-    surfaced flag — never a fabricated default.** The two rules above (zero-flag, validate up front)
-    are the SAME rule: you may only hide a value you have verified. If the value lives outside your
-    sandbox — a path on the operator's host, a network resource you cannot reach, an install-specific
-    location — you have NOT verified it, so guessing a default and hiding it is a placeholder
-    shortcut: a hidden wrong guess is strictly worse than a flag, because it silently mis-runs or
-    hard-blocks on a value the operator never saw. Instead: (a) if the artifact can discover the
-    real value at run time on the target (query the running unit, the API, the cluster), do that and
-    fall back to a flag; (b) else expose it as a flag — required, or defaulted only to a genuine,
-    documented CONVENTION (a package default), never to an invented path. Verify the guess against
-    the source of truth before baking it: e.g. a state-file location is whatever the program's own
-    code/config says it is, not where it "should" live.
-
-    **When the operator hands off a bulk capture, consume it whole — do not re-fixate on individual
-    files inside it.** If the operator has already recursively copied a directory tree (a state dir,
-    a data dir), the artifact copies/mounts that tree verbatim and lets the downstream consumer take
-    what it needs; it must NOT single out one file by an exact name/path, assert that file, or
-    reconstruct a sub-layout the operator already provided. Singling out a file is both fragile (an
-    exact path you probably have wrong) and unsafe (you drop its siblings — e.g. a SQLite `-wal`/
-    `-shm` alongside the `.db`, losing the newest writes). Recursively capturing the parent is
-    simpler AND more correct. Trust the operator's completed handoff over your model of its internals.
-
-    **A runnable artifact must own the whole operation it triggers — including quiescing anything that
-    fights it, and being safely re-runnable.** If the artifact mutates state that a controller
-    continuously reconciles (a GitOps operator, an autoscaler, an operator/CRD), it must suspend that
-    controller for the duration and restore it after — discovering the controller's identity from the
-    live objects, not a hardcoded name — or the controller races the artifact and undoes/corrupts the
-    change mid-flight. On failure, leave the system in the SAFE half-state (quiesced, not half-
-    started over inconsistent data) and say so, rather than blindly restoring. And make every step
-    idempotent: a failed run must be fixable and re-run from the top (delete-and-recreate the
-    one-shot job, skip-if-present, `rsync` not blind copy) without hand-surgery between attempts. An
-    artifact that only works on a pristine first run, or that a background reconciler can silently
-    revert, is not done.
-
-    **When an artifact copies a directory tree, know what is UNDER that tree.** A source dir can
-    contain nested/virtual mounts (FUSE, bind, network) that are NOT the data you mean to copy and
-    can be orders of magnitude larger — recursing into them fills the disk with real bytes and
-    detonates the operation. Copy with the mount-boundary respected (`rsync --one-file-system`,
-    `find -xdev`, `tar --one-file-system`), and guard capacity up front: measure the REAL source
-    size (`du -sx`, mounts excluded) against free space on the destination filesystem and refuse
-    before the first byte if it will not fit. Staging onto the same disk duplicates the data — count
-    that. A copy that assumes a directory is only what you think it is will eventually eat the host.
+    **When the operator-facing Steps are mechanically executable, SHIP A SCRIPT, NOT PROSE
+    (needs-human-executable-artifact).** If the Steps are a fixed sequence of concrete commands
+    (host-root ops, a data migration, a cutover, a multi-step provisioning run), do NOT transcribe
+    them into `--reason` — AUTHOR a single reviewable executable artifact (a `set -euo pipefail`
+    script / rendered manifest) and reduce the Steps to "review then run `path/to/script …`", giving
+    the LITERAL zero/one-flag invocation to paste. Vague imperative prose that could have been a
+    script is a shortcut, same class as a placeholder value. If the artifact must land on `main`
+    first, SPLIT into a mergeable part-(a) that authors it and a part-(b) NEEDS-HUMAN hard-dep on it.
+    The full contract — exact-command rule, one-entrypoint rule, bake-known-defaults / surface-only-
+    unvalidated-values rule, consume-a-bulk-capture-whole rule, own-and-quiesce / idempotent rule,
+    and the copy-a-tree mount-boundary rule — is in `skills/needs-human-escalation.md`. READ IT
+    before filing any escalation whose Steps are a command sequence.
  5. **ROI.** You never touched `ROI.md`. Confirm.
 
 ## Skills

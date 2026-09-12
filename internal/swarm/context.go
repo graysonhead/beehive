@@ -36,9 +36,21 @@ const defaultSummaryCap = 4096
 type turnCompactor struct {
 	pins       map[string]string // path -> content last surfaced to the agent
 	summaryCap int               // rolling-digest byte cap (0 -> defaultSummaryCap)
+
+	// decisions is the DISTILLED decision log accumulated across this honeybee's
+	// turns (analysis C). The former rollingSummary byte-sliced the transcript
+	// (head+tail, middle elided on a char boundary), so a decision the agent made
+	// mid-session silently vanished once it scrolled out of the tail — the agent then
+	// re-derived or CONTRADICTED its earlier choice. Instead we extract the salient
+	// lines (choices, root causes, fixes, test/verify results) each turn and PIN them
+	// here, so a decision survives for the whole session regardless of scrollback.
+	decisions    []string
+	seenDecision map[string]bool
 }
 
-func newTurnCompactor() *turnCompactor { return &turnCompactor{pins: map[string]string{}} }
+func newTurnCompactor() *turnCompactor {
+	return &turnCompactor{pins: map[string]string{}, seenDecision: map[string]bool{}}
+}
 
 // assemble builds the bounded per-turn context to inject next: the changed-file
 // diffs (fileFeed), the rolling transcript summary, and the caller's continue
@@ -126,24 +138,127 @@ func (tc *turnCompactor) rollingSummary(transcript string) string {
 	if cap <= 0 {
 		cap = defaultSummaryCap
 	}
+	// Distill this turn's salient decisions and accumulate them (dedup) so a choice
+	// made early survives the whole session, then present the pinned decision log
+	// PLUS the most recent tail (immediate continuity). This replaces the pure
+	// byte-slice, which dropped mid-session reasoning and let the agent contradict
+	// its own earlier decisions.
+	for _, d := range distillDecisions(transcript) {
+		if tc.seenDecision == nil {
+			tc.seenDecision = map[string]bool{}
+		}
+		if tc.seenDecision[d] {
+			continue
+		}
+		tc.seenDecision[d] = true
+		tc.decisions = append(tc.decisions, d)
+	}
+
 	t := strings.TrimRight(transcript, "\n")
-	if len(t) <= cap {
-		return t
+
+	// Budget: reserve up to half the cap for the accumulated decision log (newest
+	// wins if it overflows), the rest for the recent tail.
+	var log string
+	if len(tc.decisions) > 0 {
+		logCap := cap / 2
+		prefix := "Decisions & findings so far (pinned across turns — do not re-derive or contradict these):\n"
+		// Keep the most RECENT decisions when the log overflows its budget.
+		start := 0
+		for {
+			var probe strings.Builder
+			probe.WriteString(prefix)
+			for _, d := range tc.decisions[start:] {
+				probe.WriteString("- " + d + "\n")
+			}
+			if probe.Len() <= logCap || start >= len(tc.decisions)-1 {
+				log = probe.String()
+				break
+			}
+			start++
+		}
 	}
-	head := cap / 3
-	tail := cap - head
-	h := t[:head]
-	if i := strings.LastIndexByte(h, '\n'); i > 0 {
-		h = h[:i] // cut the head on a line boundary
+
+	tailCap := cap - len(log)
+	if tailCap < 0 {
+		tailCap = 0
 	}
-	tl := t[len(t)-tail:]
-	if i := strings.IndexByte(tl, '\n'); i >= 0 && i+1 < len(tl) {
-		tl = tl[i+1:] // start the tail on a line boundary
+	tail := t
+	truncated := false
+	if len(tail) > tailCap {
+		truncated = true
+		tail = tail[len(tail)-tailCap:]
+		if i := strings.IndexByte(tail, '\n'); i >= 0 && i+1 < len(tail) {
+			tail = tail[i+1:] // start on a line boundary
+		}
 	}
-	elided := len(t) - len(h) - len(tl)
-	return fmt.Sprintf(
-		"%s\n\n\u2026 [%d chars of earlier scrollback elided; full transcript on the session branch] \u2026\n\n%s",
-		h, elided, tl)
+
+	// No decisions and nothing elided: return the tail verbatim (unchanged from the
+	// historical under-cap behavior). Only add framing when there is something to
+	// frame — a pinned decision log or an honest elision marker.
+	if log == "" && !truncated {
+		return tail
+	}
+	var out strings.Builder
+	if log != "" {
+		out.WriteString(log)
+		out.WriteByte('\n')
+	}
+	if truncated {
+		out.WriteString("… [earlier scrollback elided; full transcript on the session branch] …\n")
+	}
+	if log != "" {
+		out.WriteString("Most recent activity:\n")
+	}
+	out.WriteString(tail)
+	return strings.TrimRight(out.String(), "\n")
+}
+
+// decisionCues mark a transcript line as a durable decision/finding worth pinning
+// across turns: a design choice, a root cause, a fix, or a test/verification
+// result. Matched case-insensitively as substrings.
+var decisionCues = []string{
+	"decid", "chose", "choose", "chosen", "because", "instead", "approach",
+	"root cause", "turns out", "tradeoff", "trade-off", "rejected", "the reason",
+	"fixed", "the fix", "the bug", "regression test", "passes", "passed", "failing",
+	"verified", "confirmed", "note that", "gotcha", "blocked on", "depends on",
+}
+
+// distillDecisions extracts the salient decision/finding lines from a transcript.
+// It is a cheap, deterministic heuristic (no model call): it keeps lines carrying
+// a decisionCue, normalizes whitespace, trims each to a sane length, and skips
+// noise (diff/tool-output lines, headings). Order-preserving; dedup is the
+// caller's (it accumulates across turns).
+func distillDecisions(transcript string) []string {
+	var out []string
+	for _, raw := range strings.Split(transcript, "\n") {
+		ln := strings.TrimSpace(raw)
+		if ln == "" {
+			continue
+		}
+		// Skip obvious non-prose noise: diff/patch lines and tool-output framing.
+		if strings.HasPrefix(ln, "+") || strings.HasPrefix(ln, "-") ||
+			strings.HasPrefix(ln, "@@") || strings.HasPrefix(ln, "#") {
+			continue
+		}
+		low := strings.ToLower(ln)
+		hit := false
+		for _, c := range decisionCues {
+			if strings.Contains(low, c) {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			continue
+		}
+		ln = strings.Join(strings.Fields(ln), " ") // normalize internal whitespace
+		const maxLine = 240
+		if len(ln) > maxLine {
+			ln = ln[:maxLine] + "…"
+		}
+		out = append(out, ln)
+	}
+	return out
 }
 
 // reinjectAll is the re-inject-everything baseline the diff feed replaces: the

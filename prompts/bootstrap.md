@@ -2,7 +2,15 @@
 
 Submodule has ROI.md, no PLAN.md. Bootstrap PLAN.md from intent.
 
-- Decompose ROI into the smallest parallelizable, context-window-sized tasks.
+- Decompose ROI into COHERENT VERTICAL SLICES — each task a self-contained deliverable one agent can
+  hold in full (the change plus its test, across the few files it spans), NOT the smallest possible
+  fragment. An isolated honeybee sees only its own task, so a change split across many micro-tasks that
+  cannot see each other loses global coherence, breaks at the seams, and thrashes review. Prefer fewer,
+  larger, independently-mergeable slices; split further ONLY when the parts are genuinely independent or
+  a slice would exceed one agent's grasp. Parallelizable is a bonus, not the primary axis — coherence is.
+- **Give every task a `Context:` line** carrying the PARENT INTENT: one or two sentences on the ROI goal
+  this task serves and WHY, so the isolated implementer understands the point of its slice without
+  opening ROI.md (which it may not). Put it in the task body: `Context: <the why>`.
 - Tag dependencies between tasks; order interdependent steps via dependency tags.
 - Cross-submodule dependencies are REAL tasks, never placeholders. A dep is LOCAL (bare id -> a task in
   THIS PLAN.md) or CROSS-SUBMODULE (qualified `<other-sm>:<taskid>`, authorized by a registered link,

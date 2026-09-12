@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spencerharmon/beehive/internal/git"
@@ -68,6 +69,8 @@ type taskBrief struct {
 	DocPath       string // REQUIRED change-doc path (beehive layer)
 	CommitStamp   string // Beehive: <taskid> <doc-path>
 	Files         []briefFile
+	Neighbors     []string // package-neighborhood: sibling files in the dirs the task touches
+	TaskID        string   // for the doc skeleton
 }
 
 // buildTaskBrief assembles the brief from the runner's already-resolved values.
@@ -89,6 +92,7 @@ func (r *Runner) buildTaskBrief(ctx context.Context, sel *selectt.Selection, wg 
 		WorktreeAbs: wtAbs,
 		DocPath:     docPath,
 		CommitStamp: fmt.Sprintf("Beehive: %s %s", sel.Task.ID, docPath),
+		TaskID:      sel.Task.ID,
 	}
 	if wtRel, err := filepath.Rel(absRoot, wtAbs); err == nil {
 		b.WorktreeRel = filepath.ToSlash(wtRel)
@@ -136,16 +140,68 @@ func (r *Runner) buildTaskBrief(ctx context.Context, sel *selectt.Selection, wg 
 		}
 		b.Files = append(b.Files, bf)
 	}
+	b.Neighbors = neighborFiles(wtAbs, b.Files)
 	return b
+}
+
+// neighborNameCap bounds how many sibling names the package-neighborhood section
+// lists, so a large package cannot blow the token budget the brief exists to cut.
+const neighborNameCap = 24
+
+// neighborFiles lists the sibling files that share a directory with any task file
+// — the package neighborhood (analysis B). A honeybee starved to only its Files:
+// excerpts writes code that ignores local conventions, misses call sites, and
+// breaks siblings; naming the neighbors (cheaply, names only — not content) lets
+// it read the relevant one on demand instead of being blind to what surrounds its
+// edit. Task files themselves are excluded (already surfaced above); the result is
+// deduped, sorted, and capped. Best-effort: an unreadable dir is skipped.
+func neighborFiles(wtAbs string, files []briefFile) []string {
+	taskSet := map[string]bool{}
+	dirs := []string{}
+	seenDir := map[string]bool{}
+	for _, f := range files {
+		taskSet[path.Clean(f.Path)] = true
+		d := path.Dir(f.Path)
+		if !seenDir[d] {
+			seenDir[d] = true
+			dirs = append(dirs, d)
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range dirs {
+		absDir := filepath.Join(wtAbs, filepath.FromSlash(d))
+		ents, err := os.ReadDir(absDir)
+		if err != nil {
+			continue
+		}
+		for _, e := range ents {
+			if e.IsDir() {
+				continue
+			}
+			rel := path.Join(d, e.Name())
+			if taskSet[rel] || seen[rel] {
+				continue
+			}
+			seen[rel] = true
+			out = append(out, rel)
+		}
+	}
+	sort.Strings(out)
+	if len(out) > neighborNameCap {
+		out = out[:neighborNameCap]
+	}
+	return out
 }
 
 // render produces the injected brief text. Deterministic given the struct.
 func (b taskBrief) render() string {
 	var sb strings.Builder
-	sb.WriteString("# Task brief (precomputed by the runner — do NOT re-derive these; read your task's files, not the whole tree)\n")
+	sb.WriteString("# Task brief (precomputed by the runner — use these values directly; read the files below, not a whole-tree scan)\n")
 	sb.WriteString("The runner already resolved your worktree, branch, pointers, and the protocol's deterministic\n")
 	sb.WriteString("choices below. Use these values directly — you do not need git plumbing or a tree scan to orient.\n")
-	sb.WriteString("(This is a floor, not a cage: read further if the task genuinely needs it.)\n\n")
+	sb.WriteString("This is a FLOOR, not a cage: read your task files AND the package neighbors that define the local\n")
+	sb.WriteString("conventions, callers, and tests before you write — code that ignores its surroundings breaks them.\n\n")
 
 	fmt.Fprintf(&sb, "- Submodule: %s\n", b.Submodule)
 	fmt.Fprintf(&sb, "- Branch: %s\n", b.Branch)
@@ -176,7 +232,44 @@ func (b taskBrief) render() string {
 			}
 		}
 	}
+
+	if len(b.Neighbors) > 0 {
+		sb.WriteString("\n## Package neighborhood (siblings of your task files — read the relevant one; match its conventions)\n")
+		sb.WriteString("These files share a directory with your working set. You are NOT limited to your `Files:` line: " +
+			"before writing, read the neighbors that define the local conventions, the symbols you call, and the tests " +
+			"that will judge you, so your change fits in and does not break a sibling.\n")
+		for _, n := range b.Neighbors {
+			fmt.Fprintf(&sb, "- %s\n", n)
+		}
+	}
+
+	sb.WriteString(b.docSkeleton())
 	sb.WriteString("\n")
+	return sb.String()
+}
+
+// docSkeleton renders the ready-to-fill change-doc template (analysis F): the
+// runner authors the deterministic STRUCTURE (path, commits header placeholder,
+// the required evidence headings) so the agent spends its turns on the prose and
+// the real evidence, not on reconstructing the doc's shape each pass. The
+// `beehive task status` command still owns the `Beehive-Commits` header value; the
+// placeholder here shows where it lands.
+func (b taskBrief) docSkeleton() string {
+	var sb strings.Builder
+	sb.WriteString("\n## Change-doc skeleton (write your doc at the REQUIRED path above; fill every section)\n")
+	sb.WriteString("Copy this into `" + b.DocPath + "` and fill it in. Do NOT leave a heading empty — a doc with no " +
+		"evidence is a guess a reviewer will reject.\n\n")
+	sb.WriteString("```markdown\n")
+	sb.WriteString("<!-- Beehive-Commits: (filled by `beehive task status` — leave as-is) -->\n")
+	fmt.Fprintf(&sb, "# %s\n\n", b.TaskID)
+	sb.WriteString("## What changed\n<one paragraph: the concrete change and why it satisfies the task>\n\n")
+	sb.WriteString("## Evidence (a reviewer must be able to re-run this)\n")
+	sb.WriteString("- Regression test: `<exact command>` — FAILS without the change, PASSES with it.\n")
+	sb.WriteString("  Paste the passing output here.\n")
+	sb.WriteString("- Live effect (deploy/service/migration tasks only): `<command>` and the confirming output.\n")
+	sb.WriteString("  If no automated test is honestly possible, say so and record the manual verification you ran.\n\n")
+	sb.WriteString("## Notes / tradeoffs\n<anything the reviewer or next honeybee needs>\n")
+	sb.WriteString("```\n")
 	return sb.String()
 }
 

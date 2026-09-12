@@ -91,16 +91,24 @@ func TestWorkBriefInjected(t *testing.T) {
 		"func Alpha()",             // alpha.go excerpt content
 		"### beta.go (first",
 		"func Beta()",
+		// Package neighborhood (analysis B): siblings of the task files are surfaced by
+		// NAME so the agent can read the local conventions, callers, and tests.
+		"## Package neighborhood",
+		"gamma.go",
+		// Change-doc skeleton (analysis F): the runner authors the doc STRUCTURE.
+		"## Change-doc skeleton",
+		"Beehive-Commits",
+		"## Evidence",
 	}
 	for _, w := range wants {
 		if !contains(firstPrompt, w) {
 			t.Fatalf("brief missing %q; got:\n%s", w, firstPrompt)
 		}
 	}
-	// Scoped to the task's Files: a file present in the worktree but NOT named in
-	// the card is never pulled into the brief.
-	if contains(firstPrompt, "gamma.go") || contains(firstPrompt, "GammaSecret") {
-		t.Fatalf("brief leaked a non-task file (gamma.go); got:\n%s", firstPrompt)
+	// Neighborhood surfaces sibling NAMES, never their CONTENT: the decoy file's
+	// body (GammaSecret) must never be pulled in — only task files are excerpted.
+	if contains(firstPrompt, "GammaSecret") {
+		t.Fatalf("brief leaked a non-task file's CONTENT (GammaSecret); got:\n%s", firstPrompt)
 	}
 }
 
