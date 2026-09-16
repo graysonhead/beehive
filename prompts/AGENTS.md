@@ -252,6 +252,7 @@ column below marks who each is for.
 | Cleanup | clearing stale worktrees/branches/claims/drift | operator | `skills/cleanup.md` |
 | Repair a corrupt PLAN.md | a plan fails to parse (e.g. `bad heartbeat ""`) after a pass was killed mid-write | operator | `skills/repair-plan.md` |
 | Reset a lost-work / looping task | a task is stuck in a `recover-lost-work` loop or was escalated to `NEEDS-HUMAN` by it, and must be reimplemented cleanly (reset `attempts`, clear the stale claim, strip lost-work notes) | operator | `skills/reset-lost-work-task.md` |
+| Definition-of-done check | authoring a task's `Check:` (bootstrap/reconcile) or judging one (review) — how to write/verify a check that catches integration failures a narrow-but-real unit check misses, plus the acceptance-task + `Invariant:` pattern for cross-cutting intent | either | `skills/definition-of-done.md` |
 | Deferred verification | a work task's effect only shows after an external system converges (GitOps reconcile, CI run, cache/TTL) | honeybee | `skills/deferred-verification.md` |
 | Self-resolve before escalating | before ANY `beehive task human` — rule out the common false blockers (tool-not-“installed”, lost work, stale/deprecated dep, in-cluster verify) that the swarm must resolve itself | honeybee | `skills/self-resolve-before-escalating.md` |
 | Needs-human escalation artifact | filing a `beehive task human` whose Steps are a command sequence (migration, cutover, host-root) — author a single reviewable script, not prose | honeybee | `skills/needs-human-escalation.md` |

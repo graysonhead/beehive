@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/spencerharmon/beehive/internal/plan"
 )
@@ -75,4 +76,70 @@ func TestTaskSubmoduleName(t *testing.T) {
 			t.Fatalf("%s accepted", in)
 		}
 	}
+}
+
+// TestSetTaskFeedback proves the review FEEDBACK disposition records a single,
+// current `Feedback:` line in the task body and SUPERSEDES any prior one, so a
+// reworked task never accumulates stale reviewer guidance across rounds.
+func TestSetTaskFeedback(t *testing.T) {
+	task := &plan.Task{Body: []string{"Context: do the thing", ""}}
+
+	setTaskFeedback(task, "  close the   integration gap: assert the live surface  ")
+	got := feedbackLines(task)
+	if len(got) != 1 {
+		t.Fatalf("want exactly one Feedback: line, got %d: %q", len(got), task.Body)
+	}
+	if got[0] != "Feedback: close the integration gap: assert the live surface" {
+		t.Fatalf("feedback not normalized/recorded: %q", got[0])
+	}
+
+	// A second round supersedes, never appends a duplicate.
+	setTaskFeedback(task, "still missing the tombstone case")
+	got = feedbackLines(task)
+	if len(got) != 1 {
+		t.Fatalf("second feedback must supersede, got %d Feedback: lines: %q", len(got), task.Body)
+	}
+	if got[0] != "Feedback: still missing the tombstone case" {
+		t.Fatalf("superseded feedback wrong: %q", got[0])
+	}
+	// The original Context: line survives.
+	if task.Body[0] != "Context: do the thing" {
+		t.Fatalf("body prelude clobbered: %q", task.Body)
+	}
+}
+
+// TestRejectFromReviewLoopCap proves the disposition's state semantics: a reject
+// from NEEDS-REVIEW returns the task to TODO and bumps attempts, and once attempts
+// exceed reject_limit it escalates to NEEDS-HUMAN rather than looping forever.
+func TestRejectFromReviewLoopCap(t *testing.T) {
+	now := time.Now().UTC()
+	task := &plan.Task{ID: "x", Status: plan.StatusReview}
+	const limit = 3
+	for i := 1; i <= limit; i++ {
+		task.Status = plan.StatusReview // a fresh review each round precedes the reject
+		if err := task.Reject(limit, now); err != nil {
+			t.Fatalf("round %d reject: %v", i, err)
+		}
+		if task.Status != plan.StatusTODO {
+			t.Fatalf("round %d: want TODO, got %s (attempts=%d)", i, task.Status, task.Attempts)
+		}
+	}
+	// One more rejection tips it past the limit -> NEEDS-HUMAN.
+	task.Status = plan.StatusReview
+	if err := task.Reject(limit, now); err != nil {
+		t.Fatalf("overflow reject: %v", err)
+	}
+	if task.Status != plan.StatusHuman {
+		t.Fatalf("past reject_limit=%d (attempts=%d) want NEEDS-HUMAN, got %s", limit, task.Attempts, task.Status)
+	}
+}
+
+func feedbackLines(t *plan.Task) []string {
+	var out []string
+	for _, l := range t.Body {
+		if len(l) >= len("Feedback:") && l[:len("Feedback:")] == "Feedback:" {
+			out = append(out, l)
+		}
+	}
+	return out
 }

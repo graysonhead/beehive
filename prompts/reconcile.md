@@ -31,6 +31,22 @@ You are given the diff of ROI.md from the last-reconciled commit to HEAD (ROI.md
   framework not yet registered, ADD a stub for it (mirror an existing one), then point checks at it. Your
   reconcile does NOT complete while any open task's check matches no stub (or `CHECKS.md` is missing) —
   the completion gate reports the offending tasks. See `docs/checks-framework-registry.md`.
+- **Cross-cutting intent needs an ACCEPTANCE TASK, not just per-leaf checks.** A per-leaf
+  `Check:` cannot see the seam BETWEEN leaves — integration is the gap between tasks and no
+  leaf owns it (the corpus disease: several "migrate X onto the shared Y" leaves each pass a
+  real but narrow unit check while the live system ends up with disconnected instances and an
+  empty user surface). When an ROI item implies a property spanning several tasks (one shared
+  substrate, an end-to-end user-visible surface, a global invariant), emit — IN ADDITION to
+  the leaves — one **terminal acceptance task** that `deps=` EVERY leaf in the cluster,
+  inherits the cluster's TOP tier weight (a leaf-dependent successor otherwise starves in the
+  lottery), carries an **`Invariant:` <one sentence>** body line naming the cross-cutting
+  property, and whose `Check:` exercises that invariant against the RUNNING system (a live
+  integration/e2e probe, an approved CHECKS.md framework) — not a per-crate unit test. Give
+  any leaf that must PRESERVE a cross-cutting contract its own `Invariant:` line too; it is the
+  reviewer's input (review judges against `Invariant:` + `Context:` + the live check, not the
+  diff alone). When a probe of the current tree shows an ALREADY-DONE task's real effect is not
+  integrated (its narrow check would pass but the invariant is false), `beehive task reopen
+  <sm> <id> --reason "<evidence>"` it. See `skills/definition-of-done.md`.
 - Cross-submodule dependencies are REAL tasks, never placeholders:
   - A dep is LOCAL (bare id -> a task in THIS PLAN.md) or CROSS-SUBMODULE (qualified `<other-sm>:<taskid>`,
     authorized by a registered link, satisfied only when that task is DONE). A bare dep naming no local

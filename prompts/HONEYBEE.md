@@ -174,8 +174,14 @@ gate enforces — do not reproduce them by hand. The only legal edges, each owne
   task's `Check:` on the MERGED tree, REFUSES the flip (reverts it to NEEDS-REVIEW) unless it exits 0 (or
   the task declared `check=none`), then pushes the merge and stamps the merge sha. See "Definition of
   done" below.
-- `NEEDS-REVIEW → NEEDS-ARBITRATION` — review rejected
-  (`beehive task status <sm> <id> NEEDS-ARBITRATION --commits-none`).
+- `NEEDS-REVIEW → NEEDS-ARBITRATION` — review rejected to an ARBITER (genuine disagreement / second
+  opinion) (`beehive task status <sm> <id> NEEDS-ARBITRATION --commits-none`).
+- `NEEDS-REVIEW → TODO` — review FEEDBACK (rework in-scope): the work is on the right track but incomplete
+  or wrong within its own scope and needs another iteration, not an arbiter. Set ONLY via `beehive task
+  reject <sm> <id> --feedback "<concrete actionable gaps>"` (never `beehive task status … TODO` from
+  NEEDS-REVIEW, which is not a legal `status` edge). It records your `Feedback:` in the task body for the
+  next work pass and bumps `attempts=`; past `reject_limit` the runner auto-escalates to NEEDS-HUMAN rather
+  than loop. Reserve NEEDS-ARBITRATION for genuine disagreement; use this for the common "almost, but…".
 - `NEEDS-ARBITRATION → DONE` — arbiter sided with the implementer (same DONE check gate applies).
 - `NEEDS-ARBITRATION → TODO` — arbiter sided with the reviewer; rework
   (`beehive task status <sm> <id> TODO --commits-none`).
@@ -245,6 +251,15 @@ range.
   compile / rollout / integration probe — NEVER a bare source-grep); if the target gained a new framework,
   add a stub to `CHECKS.md` first. `beehive plan lint <sm>` flags any check matching no stub (or a missing
   registry). See `docs/checks-framework-registry.md`.
+- **Cross-cutting intent needs an ACCEPTANCE TASK.** A per-leaf check cannot see the seam between leaves;
+  integration is the gap between tasks and no leaf owns it. When new intent implies a property spanning
+  several tasks (one shared substrate, an end-to-end user surface, a global invariant), emit — besides the
+  leaves — one terminal acceptance task that `deps=` every leaf, inherits the cluster's TOP tier weight,
+  carries an `Invariant: <one sentence>` body line, and whose `Check:` exercises that invariant against the
+  RUNNING system (a live integration/e2e probe, not a per-crate unit test). Give any leaf that must preserve
+  a cross-cutting contract its own `Invariant:` line (the reviewer judges against it). If a probe shows an
+  already-DONE task's real effect is not integrated (narrow check passes but the invariant is false),
+  `beehive task reopen <sm> <id> --reason "<evidence>"`. See `skills/definition-of-done.md`.
 - **Cross-submodule needs — author the real task in the OTHER submodule, never a placeholder.** If new
   intent means a task here needs work owned by another submodule, do NOT fake it with a local
   bare/sentinel dep. Create that work as a real task in the other submodule's `PLAN.md` (with its design
@@ -288,6 +303,22 @@ range.
 ## Work task
 Status is `TODO` — it is yours to IMPLEMENT. If the task is invalid versus your provided task card, set
 it `NEEDS-REVIEW` with a doc explaining why instead of implementing. Otherwise, to completion:
+- **If this task carries a `Feedback:` line, it is a REWORK from a prior review — read it FIRST.** The
+  task was returned to TODO because a reviewer judged the prior attempt on the right track but incomplete
+  or wrong within scope; the `Feedback:` names the concrete gaps (a missing/failing assertion, an unmet
+  `Invariant:`, an unhandled case). Address exactly those gaps. The prior attempt's branch may still exist
+  on the submodule origin (`bee-<taskid>`) — inspect it and build on what was right rather than restarting
+  blind. `attempts=` is already bumped; do not loop — if you cannot satisfy the feedback, set NEEDS-REVIEW
+  with a doc stating what remains so the reviewer can escalate.
+- **Replace, do not run in parallel. Deleting superseded code AND its tests is REQUIRED, not a shortcut.**
+  When your task replaces an implementation (a migration, a rewrite, routing a plane through a new shared
+  substrate), REMOVE the old path and the tests that covered it — do not leave the old store/fold/endpoint
+  standing alongside the new one. Two coexisting implementations is the disconnected-instances disease
+  (bespoke store kept next to the shared one, both "passing"). This does NOT conflict with "never weaken a
+  test to make a change pass": deleting a test whose SUBJECT still exists, to dodge a real failure, is
+  forbidden; deleting a test whose subject you REMOVED/REPLACED is required hygiene. If a pre-existing test
+  still passes only because the old parallel path still exists, that is a signal you did not actually
+  replace — finish the replacement and let the obsolete test die with its subject.
 - **Discovered a missing prerequisite → FILE it, don't fake it and don't escalate.** If, while
   implementing, you find your task genuinely depends on work that does not yet exist — a base job, a
   script, an upstream manifest, a task owned by a linked submodule — do NOT invent a dangling/sentinel

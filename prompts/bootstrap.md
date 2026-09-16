@@ -32,6 +32,16 @@ Submodule has ROI.md, no PLAN.md. Bootstrap PLAN.md from intent.
   — mirror another submodule's CHECKS.md), then point every check at a stub. Bootstrap does NOT complete
   while any open task's check matches no stub (or `CHECKS.md` is missing). See
   `docs/checks-framework-registry.md`.
+- **Cross-cutting intent needs an ACCEPTANCE TASK.** A per-leaf `Check:` cannot see the seam
+  between leaves — integration is the gap between tasks and no leaf owns it. When an ROI item
+  implies a property spanning several tasks (one shared substrate, an end-to-end user-visible
+  surface, a global invariant), emit — in addition to the leaves — one **terminal acceptance
+  task** that `deps=` every leaf, inherits the cluster's TOP tier weight (a leaf-dependent
+  successor otherwise starves in the lottery), carries an **`Invariant:` <one sentence>** body
+  line naming the cross-cutting property, and whose `Check:` exercises that invariant against
+  the RUNNING system (a live integration/e2e probe on an approved CHECKS.md framework) — not a
+  per-crate unit test. Give any leaf that must preserve a cross-cutting contract its own
+  `Invariant:` line too (the reviewer judges against it). See `skills/definition-of-done.md`.
 - **Weight each task on a logarithmic (base-2) priority scale (see "Weighting").**
 
 ## Weighting (logarithmic, base-2)

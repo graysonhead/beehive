@@ -26,6 +26,7 @@ func taskCmd() *cobra.Command {
 	c := &cobra.Command{Use: "task", Short: "manage PLAN.md tasks"}
 	c.AddCommand(taskHumanCmd())
 	c.AddCommand(taskStatusCmd())
+	c.AddCommand(taskRejectCmd())
 	c.AddCommand(taskAddCmd())
 	c.AddCommand(taskBlockCmd())
 	c.AddCommand(taskCheckCmd())
@@ -689,6 +690,125 @@ func taskCheckCmd() *cobra.Command {
 // wait escalates to NEEDS-HUMAN rather than spinning forever. Authors the PLAN.md
 // commit directly on primary main, so it syncs the hive remote before and
 // publishes after, exactly like `task human`/`task block`.
+// taskRejectCmd is the REVIEW FEEDBACK disposition: return a NEEDS-REVIEW task to
+// TODO for in-scope rework, recording the reviewer's Feedback: in the task body
+// (a fresh work pass reads it and continues) and bumping attempts. Past
+// reject_limit the underlying plan.Task.Reject escalates to NEEDS-HUMAN instead of
+// looping forever. It is the direct, single-hop alternative to bouncing simple
+// rework through NEEDS-ARBITRATION: an arbiter is reserved for genuine
+// disagreement. Commits are recorded none (a feedback bounce ships no submodule
+// code); the runner merges the local hive commit to main like the other task verbs.
+func taskRejectCmd() *cobra.Command {
+	var feedback, docFlag string
+	var noCommit bool
+	cmd := &cobra.Command{
+		Use:   "reject <submodule> <task-id> --feedback <text>",
+		Short: "review FEEDBACK: return a NEEDS-REVIEW task to TODO for in-scope rework (records Feedback:, bumps attempts, auto-escalates to NEEDS-HUMAN past reject_limit)",
+		Long: "The reviewer's in-scope-rework disposition. When the work is on the right track but " +
+			"incomplete or wrong within its own scope, return it to TODO with concrete, actionable " +
+			"--feedback recorded as a `Feedback:` line in the task body; a fresh work pass reads it and " +
+			"continues. Bumps the task's attempts=; once attempts exceed reject_limit the task escalates " +
+			"to NEEDS-HUMAN rather than loop. Reserve `task status ... NEEDS-ARBITRATION` for genuine " +
+			"disagreement needing an arbiter. Commits are recorded none. Commits PLAN.md to the local hive " +
+			"branch (the runner merges to main); does not push.",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			subArg, id := args[0], args[1]
+			if strings.TrimSpace(feedback) == "" {
+				return fmt.Errorf("--feedback is required (the concrete, actionable gaps the rework must close)")
+			}
+			root, err := findRoot()
+			if err != nil {
+				return err
+			}
+			subName, err := taskSubmoduleName(subArg)
+			if err != nil {
+				return err
+			}
+			limit := 3
+			if eff, cerr := config.Resolve(root, subName); cerr == nil && eff.RejectLimit > 0 {
+				limit = eff.RejectLimit
+			}
+			planRel := filepath.Join("submodules", subName, repo.PlanFile)
+			planPath := filepath.Join(root, planRel)
+			b, err := os.ReadFile(planPath)
+			if err != nil {
+				return err
+			}
+			p, err := plan.Parse(string(b))
+			if err != nil {
+				return err
+			}
+			t := p.Find(id)
+			if t == nil {
+				return fmt.Errorf("task %q not found in %s", id, planRel)
+			}
+			if t.Status != plan.StatusReview {
+				return fmt.Errorf("task %s is %s, not %s; `beehive task reject` is the REVIEW feedback disposition "+
+					"(for other edges use `beehive task status`)", id, t.Status, plan.StatusReview)
+			}
+			from := t.Status
+			// Record the reviewer's feedback in the task body BEFORE the state change, so the
+			// next work pass reads exactly what to fix. A prior Feedback: line is superseded.
+			setTaskFeedback(t, feedback)
+			// A feedback bounce ships no submodule code: record commits=none (mirrors the
+			// rework->TODO commits convention the handoff gate enforces).
+			t.Commits = nil
+			t.CommitsSet = true
+			if err := t.Reject(limit, time.Now().UTC()); err != nil {
+				return err
+			}
+			to := t.Status
+			if err := os.WriteFile(planPath, []byte(p.String()), 0o644); err != nil {
+				return err
+			}
+			commitPaths := []string{planRel}
+			if d := strings.TrimSpace(docFlag); d != "" {
+				commitPaths = append(commitPaths, d)
+			}
+			if noCommit {
+				fmt.Printf("%s %s: %s -> %s (review feedback, attempts=%d/%d); PLAN.md written, NOT committed (--no-commit)\n",
+					subName, id, from, to, t.Attempts, limit)
+				return nil
+			}
+			msg := fmt.Sprintf("plan: %s %s -> %s (review feedback, attempts=%d)\n\nBeehive: %s plan", id, from, to, t.Attempts, id)
+			if err := git.New(root).CommitPaths(cmd.Context(), msg, commitPaths...); err != nil && err != git.ErrNothing {
+				return err
+			}
+			fmt.Printf("%s %s: %s -> %s (review feedback, attempts=%d/%d), committed to the local hive branch\n",
+				subName, id, from, to, t.Attempts, limit)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&feedback, "feedback", "", "concrete, actionable gaps the rework must close (recorded as a Feedback: line in the task body)")
+	cmd.Flags().StringVar(&docFlag, "doc", "", "optional rejection/feedback doc path to commit alongside PLAN.md")
+	cmd.Flags().BoolVar(&noCommit, "no-commit", false, "write PLAN.md but do not git-commit it (you commit yourself)")
+	return cmd
+}
+
+// setTaskFeedback records a reviewer's rework feedback as a single `Feedback:` line
+// in the task body, superseding any prior Feedback: line so stale guidance never
+// accumulates. The body is round-tripped verbatim by the plan serializer, so the
+// next work pass reads it straight from the task card.
+func setTaskFeedback(t *plan.Task, feedback string) {
+	one := strings.Join(strings.Fields(feedback), " ")
+	kept := make([]string, 0, len(t.Body))
+	for _, l := range t.Body {
+		if strings.HasPrefix(strings.TrimSpace(l), "Feedback:") {
+			continue
+		}
+		kept = append(kept, l)
+	}
+	// trim trailing blanks so the appended block sits cleanly at the end
+	for len(kept) > 0 && strings.TrimSpace(kept[len(kept)-1]) == "" {
+		kept = kept[:len(kept)-1]
+	}
+	if len(kept) > 0 {
+		kept = append(kept, "")
+	}
+	t.Body = append(kept, "Feedback: "+one)
+}
+
 func taskDeferCmd() *cobra.Command {
 	var until, reason string
 	cmd := &cobra.Command{

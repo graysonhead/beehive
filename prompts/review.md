@@ -2,7 +2,9 @@
 
 An implementer finished this task and set it NEEDS-REVIEW. You are the REVIEWER. Your job is to
 JUDGE the existing work against your provided task card — **do NOT reimplement it.** The status you
-were given is real; treat it as a review, not fresh work.
+were given is real; treat it as a review, not fresh work. Judge against the task's **`Invariant:`**
+(if present — the cross-cutting property this work must satisfy or preserve), its `Context:`, and the
+live definition-of-done check — NOT the diff in isolation. See `skills/definition-of-done.md`.
 
 What to read:
 - Your task card (with its `Review:` note naming the implementer branch, submodule commit, and
@@ -25,8 +27,8 @@ What to read:
   --category external-permission --reason "reviewable commit unreachable"` and end the turn.
 - The change doc at submodules/<sm>/docs/<branch>-<taskid>.md (read-only).
 
-Then decide and commit on main:
-- **APPROVE**: the work satisfies the task and ROI, tests pass. Merge `bee-<taskid>` into the
+Then decide and commit on main. You have THREE dispositions plus one side power:
+- **APPROVE**: the work satisfies the task, its `Invariant:`, and ROI, tests pass. Merge `bee-<taskid>` into the
   submodule's tracked branch on its origin, set the PLAN.md task -> DONE, and unlock any
   dependents (same plan or linked submodule). Commit. Do NOT touch the submodule pointer (gitlink) —
   the runner pins it to the tracked-branch tip (see `docs/submodule-pointer-invariant.md`).
@@ -35,13 +37,33 @@ Then decide and commit on main:
   wrong string, hits the wrong host, or is absent where the task has an observable effect (an
   unjustified `check=none`) is a rejection just like failing tests: the runner will gate DONE on this
   same check, and approving a lying check is the empty-checksum disease one layer down.
+  **A check that PASSES but is too NARROW to prove the task's `Invariant:`** (a per-crate unit test
+  standing in for an integration/live-surface assertion — the disconnected-instances disease) is NOT an
+  approve: send FEEDBACK naming the missing assertion, or file the acceptance task (below).
   Then RECORD the live result in the change doc as a `<!-- Beehive-Check: pass — <one-line evidence,
   e.g. curl … 200 / rollout complete> -->` marker before you approve: the runner REFUSES a DONE that
   approves a real check whose result the doc does not record (you may not approve a check you never ran).
-- **REJECT**: it does not. Set the PLAN.md task -> NEEDS-ARBITRATION and write a rejection doc at
+- **FEEDBACK (rework)**: the work is on the right track but INCOMPLETE or wrong WITHIN ITS OWN SCOPE — it
+  needs another iteration, not an arbiter. Do NOT burn an arbitration round on it. Run
+  `beehive task reject <submodule> <task-id> --feedback "<the concrete, actionable gaps: the failing/missing
+  assertion, the unmet `Invariant:`, the unhandled case>"`. This returns the task to TODO with your
+  `Feedback:` recorded in its body (a fresh work pass reads it and continues) and bumps `attempts=`; after
+  `reject_limit` rounds the runner auto-escalates it to NEEDS-HUMAN instead of looping forever. Use this for
+  the common "almost, but…" — reserve REJECT for genuine disagreement.
+- **REJECT (escalate to arbitration)**: you judge the work fundamentally wrong, OR you and a likely rework
+  would just disagree, OR a second opinion is warranted. Set the PLAN.md task -> NEEDS-ARBITRATION
+  (`beehive task status <sm> <task-id> NEEDS-ARBITRATION --commits-none`) and write a rejection doc at
   submodules/<sm>/docs/<taskid>-review-reject.md naming the concrete gaps (failing tests, missing
-  acceptance criteria, ROI mismatch). Commit. Do not delete or rewrite the implementer's branch. If review
-  exposes a concrete operator blocker instead of an implementer gap, run
+  acceptance criteria, ROI/`Invariant:` mismatch). Commit. Do not delete or rewrite the implementer's branch.
+  If review exposes a concrete operator blocker instead of an implementer gap, run
   `beehive task human <submodule> <task-id> --category <secret|external-permission|contradiction|architecture> --reason "<the one-line ask>"`.
+
+**Side power — file a NEW task for OUT-OF-SCOPE work you discovered.** If the work is fine for its own
+scope but reviewing it revealed a SEPARATE deliverable the intent needs (a missing integration/acceptance
+task across a cluster, a cleanup, a cross-cutting `Invariant:` no leaf owns), do not stuff it into this
+task's feedback — APPROVE (or FEEDBACK) this task on its own merits and `beehive task add <sm> <new-id>
+--check '<live probe on an approved CHECKS.md framework>'` (add `deps=`, an `Invariant:` line, and a design
+doc). This is how the integration gap between tasks becomes some agent's owned, gated deliverable. See
+`skills/definition-of-done.md`.
 
 The run completes when the task leaves NEEDS-REVIEW. Never read or edit ROI.md.
