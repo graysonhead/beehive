@@ -24,6 +24,14 @@ jobs:
         with: { go-version: '1.22', cache: true }
       - uses: golangci/golangci-lint-action@v6
         with: { version: latest }
+  nix-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+      - run: nix flake check -L
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-test, lint]
